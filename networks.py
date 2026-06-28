@@ -31,6 +31,18 @@ def build_mlp(in_dim, out_dim, hidden=(256, 256), out_gain=1.0):
     Orthogonal init with a SMALL gain on the final layer is a standard PPO
     stabilizer: it makes the policy start near-deterministic and the value head
     start near zero, so early training doesn't explode.
+
+    MLP is a stack of fully connected Linear layers with a nonlinearity between them. 
+    obs -> Linear -> ELU -> Linear -> ELU -> Linear -> output
+
+    Final layer has no activation, because the output is an action mean that needs to be any real number 
+
+    Orthogonal initializes each weight matrix so its columns are orthonormal (scaled by a gain). 
+    This keeps the variance of signals and gradients stable as they pass through layers at the start of the training
+
+    Actor - "out gain of 0.1, why so small?" -> it's actually 0.01, and that's the point. 
+
+    
     """
     sizes = [in_dim, *hidden, out_dim]
     layers = []
@@ -49,31 +61,47 @@ def build_mlp(in_dim, out_dim, hidden=(256, 256), out_gain=1.0):
     nn.init.orthogonal_(last.weight, gain=out_gain)   # small gain on output
     return net
 
-
+# nn.Module means Actor inherits PyTorch's base Module.
 class Actor(nn.Module):
-    """Gaussian policy: obs -> Normal(mean(obs), std)."""
+    """
+    Gaussian policy: obs -> Normal(mean(obs), std).
+
+    Actor is the policy - it decides what to do 
+    """
 
     def __init__(self, obs_dim, act_dim, hidden=(256, 256), init_std=0.6):
+        # what lets PyTorch automatically find the network's parameters.
         super().__init__()
+        # mean_net (an MLP from obs_dim -> act_dim, giving the mean action for a given observation)
         self.mean_net = build_mlp(obs_dim, act_dim, hidden, out_gain=0.01)
         # log_std is a learnable parameter, NOT a function of the observation.
         # State-independent exploration noise that the optimizer shrinks as the
         # policy grows confident. Stored as log so std = exp(log_std) stays > 0.
+
+        # the global spread you actually understand
         self.log_std = nn.Parameter(torch.full((act_dim,), float(np.log(init_std))))
 
+    # Gaussian Policy: for continuous control you can't output discrete action probabilities
+    # so the policy is a normal distribution over actions - Normal (mean, std)
     def distribution(self, obs):
         mean = self.mean_net(obs)
         std = self.log_std.exp().expand_as(mean)
-        return Normal(mean, std)
+        return Normal(mean, std) # Normal is a diagonal Gaussian - 29 independent 1-D Gaussians, one per joint. 
 
+    # acting in the world during rollout collection. 
+    # we are only generating data to step the env, not training yet
     @torch.no_grad()
     def act(self, obs):
         """Sample an action for rollout collection. Returns action + its log-prob."""
+        # builds the distribution, then sample() draws a random action from it 
         dist = self.distribution(obs)
+        # draws a random action from it - the randomness of sampling of its exploration. 
         action = dist.sample()
-        log_prob = dist.log_prob(action).sum(-1)     # sum over action dims
+        # the log probability of the action it just chose, which PPO will need later
+        log_prob = dist.log_prob(action).sum(-1)     # sum over action  dims
         return action, log_prob
 
+    # learning counterpart: takes action as an input 
     def evaluate(self, obs, action):
         """Used in the UPDATE: log-prob of stored actions under the CURRENT policy,
         plus entropy (an exploration bonus)."""
@@ -84,13 +112,19 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
-    """Value function: obs -> V(s), a single scalar per state."""
+    """
+    Critic is the value function - it judges how good a situation is. 
+    Value function: obs -> V(s), a single scalar per state.
+    """
 
     def __init__(self, obs_dim, hidden=(256, 256)):
         super().__init__()
-        self.v_net = build_mlp(obs_dim, 1, hidden, out_gain=1.0)
+        # Out gain can be one, because the value estimate can be any value. 
+        self.v_net = build_mlp(obs_dim, 1, hidden, out_gain=1.0) # one MLP from obs_dim
 
     def forward(self, obs):
+        # V(s) is a single number
+        # How much total discounted reward do I expect from this state onward.
         return self.v_net(obs).squeeze(-1)            # drop the trailing dim
 
 

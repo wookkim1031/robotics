@@ -1,21 +1,18 @@
 """
-Stage 3 — watch the trained DeepMimic policy track a reference clip.
+Evaluate a trained DeepMimic (mimic) policy.
 
-Loads a checkpoint saved by train_mimic.py (default: ppo_mimic.pt), runs the
-actor's MEAN action (no exploration noise) so you see the deterministic learned
-behavior, and renders the robot imitating the clip. It re-applies the SAME
-observation normalization used during training (saved obs_mean / obs_var) — a
-policy fed unnormalized obs at eval time would behave like it never trained.
-
-This script imports the single canonical MimicEnv from mimic_env.py (it does NOT
-define its own), so evaluation uses exactly the environment training used.
-
-Usage (save a video, works under plain python on macOS):
-    python eval_mimic.py --model mujoco_menagerie/unitree_g1/scene.xml \
-        --clip <walk.csv> --ckpt ppo_mimic.pt --video mimic.mp4
+Usage — save a video:
+    python eval_mimic_policy.py \
+        --model mujoco_menagerie/unitree_g1/scene.xml \
+        --clip lafan1_g1/g1/walk1_subject1.csv \
+        --ckpt ppo_mimic.pt \
+        --video mimic_out.mp4
 
 Live viewer instead (needs mjpython on macOS):
-    mjpython eval_mimic.py --model ... --clip <walk.csv> --ckpt ppo_mimic.pt --viewer
+    mjpython eval_mimic_policy.py \
+        --model mujoco_menagerie/unitree_g1/scene.xml \
+        --clip lafan1_g1/g1/walk1_subject1.csv \
+        --viewer
 """
 
 import argparse
@@ -33,7 +30,9 @@ def load_policy(ckpt_path, obs_dim, act_dim):
     actor = Actor(obs_dim, act_dim)
     actor.load_state_dict(ck["actor"])
     actor.eval()
-    return actor, ck.get("obs_mean", None), ck.get("obs_var", None)
+    mean = ck.get("obs_mean", None)
+    var = ck.get("obs_var", None)
+    return actor, mean, var
 
 
 def normalize(obs, mean, var):
@@ -44,7 +43,6 @@ def normalize(obs, mean, var):
 
 @torch.no_grad()
 def policy_action(actor, obs_n):
-    # MEAN action = deterministic; the learned behavior without exploration noise
     return actor.mean_net(torch.as_tensor(obs_n)).numpy()
 
 
@@ -81,11 +79,11 @@ def run_viewer(env, actor, mean, var):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", required=True, help="G1 SCENE xml (with a floor)")
-    ap.add_argument("--clip", required=True, help="LAFAN1 G1 .csv that was imitated")
+    ap.add_argument("--model", required=True)
+    ap.add_argument("--clip", required=True)
     ap.add_argument("--ckpt", default="ppo_mimic.pt")
-    ap.add_argument("--video", default="mimic.mp4")
-    ap.add_argument("--seconds", type=float, default=10.0)
+    ap.add_argument("--video", default="mimic_out.mp4")
+    ap.add_argument("--seconds", type=float, default=12.0)
     ap.add_argument("--viewer", action="store_true", help="live viewer (needs mjpython)")
     args = ap.parse_args()
 
@@ -93,7 +91,6 @@ def main():
     env = MimicEnv(args.model, MotionLib(frames, fps=30.0))
     actor, mean, var = load_policy(args.ckpt, env.obs_dim, env.action_dim)
     print(f"loaded {args.ckpt}: obs={env.obs_dim} act={env.action_dim} "
-          f"clip={env.motion.duration:.1f}s "
           f"(normalization: {'on' if mean is not None else 'off'})")
 
     if args.viewer:

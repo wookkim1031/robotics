@@ -52,10 +52,10 @@ class MotionLib:
         else: 
             t = min(t, self.duration - 1e-6)
         
-        fk = t * self.fps 
-        i0 = int(np.floor(fk)) % self.num_frames
-        i1 = (i0 + 1) % self.num_frames
-        a = fk - np.floor(fk)
+        fk = t * self.fps  # how many frames have elapsed at time t. 
+        i0 = int(np.floor(fk)) % self.num_frames # the frame just before t
+        i1 = (i0 + 1) % self.num_frames # the next frame
+        a = fk - np.floor(fk) # how far between them
 
         f0, f1 = self.frames[i0], self.frames[i1]
         q = f0.copy()
@@ -65,6 +65,8 @@ class MotionLib:
 
         return MotionState(qpos=q, root_pos=q[0:3], root_rot=q[3:7], dof_pos=q[7:])
     
+# nq: full length of qpos 
+# num_dof: Number of actuated joints 
 def make_synthetic_squat(nq: int, num_dof: int, base_qpos=None,
                          fps: float = 30.0, seconds: float = 2.0,
                          sink: float = 0.20) -> np.ndarray:
@@ -81,7 +83,6 @@ def make_synthetic_squat(nq: int, num_dof: int, base_qpos=None,
         base_qpos[2] = 0.78
         base_qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
     base_qpos = np.asarray(base_qpos, dtype=np.float64)
-    base_qpos[10] = 1
     frames = np.tile(base_qpos, (T, 1))           # every frame starts from stand
     for k in range(T):
         ph = 2 * np.pi * k / T
@@ -91,6 +92,7 @@ def make_synthetic_squat(nq: int, num_dof: int, base_qpos=None,
         def addj(i, v):
             if i < num_dof:
                 frames[k, 7 + i] += v             # delta on top of the stand pose
+        # addj adds v * s to joint i, so the hips/knees/ankles bend proportionally to how deep the squat currently is.
         addj(0, 0.6 * s); addj(3, 1.2 * s); addj(4, -0.6 * s)   # left  hip, knee, ankle
         addj(6, 0.6 * s); addj(9, 1.2 * s); addj(10, -0.6 * s)  # right hip, knee, ankle
     return frames

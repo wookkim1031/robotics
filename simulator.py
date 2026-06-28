@@ -56,6 +56,7 @@ class Simulator:
         
         # Track every body EXCEPT world (index 0). These indices are what we read state for, 
         # in a stable order you can rely on for observations later.
+        # nobdy is number of rigid bodies (pelvies, thigh, shin, foot)
         self.body_ids = list(range(1, self.model.nbody))
         self.body_names = [
             mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_BODY, i)
@@ -118,37 +119,39 @@ class Simulator:
                 name = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_JOINT, jid)
                 # record violation: the joint name, the acutal min/max values seen in the clip, the model's allowed lo/hi. 
                 issues.append((name, float(col.min()), float(col.max()), float(lo), float(hi)))
+                return issues
 
-# State readout
-def get_bodies_state(self, w_last: bool = True) -> Bodystate:
-    d, ids = self.data, self.body_ids
+    # State readout
+    # reads the current kinematic state of every tracked body 
+    def get_bodies_state(self, w_last: bool = True) -> Bodystate:
+        d, ids = self.data, self.body_ids
 
-    # Where a body's frame origin sits in the world
-    pos = d.xpos[ids].copy() # [B,3]
-    # Which way the body is oriented. Contains no position information at all
-    rot = d.xquat[ids].copy() # [B,4] wxyz
-    if w_last: 
-        rot = quat_wxyz_to_xzyw(rot) # -> xyzw to match ProtoMotions
-    
-    lin = np.zeros((self.num_bodies, 3))
-    ang = np.zeros((self.num_bodies, 3))
-    res = np.zeros(6)
-    for k, bid in enumerate(ids): 
-        # 6D spatial velocity in world frame 
-        mujoco.mj_objectVelocity(
-            self.model, d, mujoco.mjtObj.mjOBJ_BODY, bid, res, 0 
-        )
-        ang[k] = res[:3]
-        lin[k] = res[3:]
+        # Where a body's frame origin sits in the world
+        pos = d.xpos[ids].copy() # [B,3]
+        # Which way the body is oriented. Contains no position information at all
+        rot = d.xquat[ids].copy() # [B,4] wxyz
+        if w_last: 
+            rot = quat_wxyz_to_xzyw(rot) # -> xyzw to match ProtoMotions
+        
+        lin = np.zeros((self.num_bodies, 3))
+        ang = np.zeros((self.num_bodies, 3))
+        res = np.zeros(6)
+        for k, bid in enumerate(ids): 
+            # 6D spatial velocity in world frame 
+            mujoco.mj_objectVelocity(
+                self.model, d, mujoco.mjtObj.mjOBJ_BODY, bid, res, 0 
+            )
+            ang[k] = res[:3]
+            lin[k] = res[3:]
 
-        # add the leading env dim (==1 for now)
-        return Bodystate(
-            rigid_body_pos=pos[None],
-            rigid_body_rot=rot[None],
-            rigid_body_vel=lin[None],
-            rigid_body_ang_vel=ang[None]
-        )
-    
+            # add the leading env dim (==1 for now)
+            return Bodystate(
+                rigid_body_pos=pos[None],
+                rigid_body_rot=rot[None],
+                rigid_body_vel=lin[None],
+                rigid_body_ang_vel=ang[None]
+            )
+        
 if __name__ == "__main__": 
     import sys
     sim = Simulator(sys.argv[1] if len(sys.argv) > 1 else "_test_min.xml")
